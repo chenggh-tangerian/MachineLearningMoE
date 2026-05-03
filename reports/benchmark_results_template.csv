@@ -1,0 +1,6 @@
+batch_size,throughput_samples_per_second
+1,
+8,
+16,
+32,
+64,
