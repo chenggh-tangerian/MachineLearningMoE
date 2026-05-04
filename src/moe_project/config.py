@@ -14,5 +14,9 @@ class ProjectConfig:
     router_temperature: float = 1.0
     router_balance_weight: float = 0.01
     router_warmup_samples: int = 1024
+    mrf_lambda: float = 0.5
+    mrf_iters: int = 5
+    mrf_neighbor_k: int = 4
+    mrf_neighbor_sigma: float = 1.0
     learning_rate: float = 2e-3
     drop_rate: float = 0.1
