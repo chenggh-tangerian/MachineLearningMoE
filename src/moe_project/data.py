@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 
 
 @dataclass(frozen=True)
@@ -72,9 +72,94 @@ class DigitsBenchmarkDataset(Dataset):
         return self.features[index], self.labels[index]
 
 
-def load_dataset(name: Literal["digits", "synthetic"], *, train: bool, seed: int, input_dim: int, num_classes: int, samples: int) -> Dataset:
+class ArrayDataset(Dataset):
+    def __init__(self, features: torch.Tensor, labels: torch.Tensor):
+        self.features = features
+        self.labels = labels
+
+    def __len__(self) -> int:
+        return self.features.size(0)
+
+    def __getitem__(self, index: int):
+        return self.features[index], self.labels[index]
+
+
+def load_dataset(name: Literal["digits", "synthetic", "mnist", "food101"], *, train: bool, seed: int, input_dim: int, num_classes: int, samples: int) -> Dataset:
     if name == "digits":
         return DigitsBenchmarkDataset(train=train, seed=seed)
+
+    if name == "mnist":
+        try:
+            from sklearn.datasets import fetch_openml
+            from sklearn.decomposition import PCA
+            from sklearn.model_selection import train_test_split
+            from sklearn.preprocessing import StandardScaler
+        except Exception as exc:
+            raise RuntimeError("MNIST dataset requires scikit-learn to be installed") from exc
+
+        mnist = fetch_openml("mnist_784", version=1, as_frame=False)
+        features = torch.tensor(mnist.data, dtype=torch.float32)
+        labels = torch.tensor(mnist.target.astype("int64"), dtype=torch.long)
+
+        train_features, test_features, train_labels, test_labels = train_test_split(
+            features,
+            labels,
+            train_size=0.8,
+            random_state=seed,
+            stratify=labels,
+        )
+
+        scaler = StandardScaler()
+        train_features = torch.tensor(scaler.fit_transform(train_features.numpy()), dtype=torch.float32)
+        test_features = torch.tensor(scaler.transform(test_features.numpy()), dtype=torch.float32)
+
+        if train_features.size(1) != input_dim:
+            pca = PCA(n_components=input_dim, random_state=seed)
+            train_features = torch.tensor(pca.fit_transform(train_features.numpy()), dtype=torch.float32)
+            test_features = torch.tensor(pca.transform(test_features.numpy()), dtype=torch.float32)
+
+        if train:
+            target_features, target_labels = train_features, train_labels
+            max_samples = min(samples, target_features.size(0))
+            gen = torch.Generator().manual_seed(seed)
+        else:
+            target_features, target_labels = test_features, test_labels
+            max_samples = min(max(256, samples // 5), target_features.size(0))
+            gen = torch.Generator().manual_seed(seed + 1)
+
+        indices = torch.randperm(target_features.size(0), generator=gen)[:max_samples]
+        return ArrayDataset(target_features[indices], target_labels[indices])
+
+    if name == "food101":
+        try:
+            from torchvision import datasets, transforms
+        except Exception as exc:
+            raise RuntimeError("Food-101 dataset requires torchvision to be installed") from exc
+
+        side = int(input_dim ** 0.5)
+        if side * side != input_dim:
+            raise ValueError("food101 requires input_dim to be a perfect square")
+
+        transform = transforms.Compose(
+            [
+                transforms.Grayscale(num_output_channels=1),
+                transforms.Resize((side, side)),
+                transforms.ToTensor(),
+                transforms.Lambda(lambda t: t.view(-1)),
+            ]
+        )
+        split = "train" if train else "test"
+        dataset = datasets.Food101(root="data/food101", split=split, download=True, transform=transform)
+
+        if train:
+            max_samples = min(samples, len(dataset))
+            gen = torch.Generator().manual_seed(seed)
+        else:
+            max_samples = min(max(256, samples // 5), len(dataset))
+            gen = torch.Generator().manual_seed(seed + 1)
+
+        indices = torch.randperm(len(dataset), generator=gen)[:max_samples].tolist()
+        return Subset(dataset, indices)
 
     if train:
         return ClusteredToyDataset(num_samples=samples, input_dim=input_dim, num_classes=num_classes, seed=seed)

@@ -15,7 +15,8 @@ class RoutingOutput:
     aux_loss: torch.Tensor
     load: torch.Tensor
 
-
+# 核心路由器实现：KMeansRouter 和 RandomRouter
+# 以及一个辅助函数 build_router_warmup_features 用于从数据集中提取特征来初始化 KMeansRouter 的质心。
 class KMeansRouter(nn.Module):
     """用 K-Means 近似专家原型的路由器。"""
 
@@ -30,6 +31,11 @@ class KMeansRouter(nn.Module):
         self.register_buffer("fitted", torch.tensor(False))
 
     def fit(self, features: torch.Tensor, max_iter: int = 50) -> None:
+        """
+        这个函数时用来在训练前根据数据特征初始化 K-Means 路由器的质心。它接受一个特征张量，运行 K-Means 算法（如果 scikit-learn 可用）
+        或者使用简单的随机初始化和迭代更新来找到质心。
+        最终，质心会被存储在 `self.centroids` 中，并且 `self.fitted` 会被设置为 True，表示路由器已经准备好使用了。
+        """
         features = features.detach().float().cpu()
         if features.ndim != 2:
             raise ValueError("KMeansRouter.fit expects a 2D tensor")

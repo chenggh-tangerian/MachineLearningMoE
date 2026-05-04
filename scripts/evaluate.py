@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--checkpoint", type=str, default="", help="Optional checkpoint path")
     parser.add_argument("--output-json", type=str, default="", help="Optional JSON summary path")
-    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic"])
+    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic", "mnist", "food101"])
     return parser.parse_args()
 
 
@@ -44,6 +44,8 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     config = ProjectConfig()
+    if args.dataset == "food101":
+        config.num_classes = 101
     device = build_device(args.device)
 
     dataset = load_dataset(

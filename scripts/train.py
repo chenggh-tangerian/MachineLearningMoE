@@ -18,6 +18,7 @@ from moe_project.config import ProjectConfig
 from moe_project.data import load_dataset
 from moe_project.model import MoEClassifier
 from moe_project.router import build_router_warmup_features
+from moe_project.transformer import SimpleTransformer
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,7 +27,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--samples", type=int, default=2048)
-    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic"], help="Benchmark dataset")
+    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic", "mnist", "food101"], help="Benchmark dataset")
+    parser.add_argument("--model", default="moe", choices=["moe", "transformer"], help="Model type")
+    parser.add_argument("--seq-len", type=int, default=1)
+    parser.add_argument("--num-layers", type=int, default=2)
+    parser.add_argument("--num-heads", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--save-dir", type=str, default="outputs/train")
     parser.add_argument("--save-checkpoint", action="store_true")
@@ -70,11 +75,23 @@ def evaluate(model, loader, device):
     return total_correct / total_samples
 
 
+def fit_router(model, router_features, device):
+    if hasattr(model, "moe"):
+        model.moe.router.fit(router_features.to(device))
+        return
+
+    if hasattr(model, "blocks"):
+        for block in model.blocks:
+            block.moe.router.fit(router_features.to(device))
+
+
 def main() -> None:
     args = parse_args()
     torch.manual_seed(args.seed)
 
     config = ProjectConfig()
+    if args.dataset == "food101":
+        config.num_classes = 101
     if args.device == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
     else:
@@ -101,8 +118,17 @@ def main() -> None:
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
 
     router_features = build_router_warmup_features(train_set, config.router_warmup_samples)
-    model = MoEClassifier(config).to(device)
-    model.moe.router.fit(router_features.to(device))
+    if args.model == "transformer":
+        model = SimpleTransformer(
+            config,
+            seq_len=args.seq_len,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+        ).to(device)
+    else:
+        model = MoEClassifier(config).to(device)
+
+    fit_router(model, router_features, device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     history = []

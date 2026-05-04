@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-sizes", nargs="*", type=int, default=[1, 8, 16, 32, 64])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-csv", type=str, default="reports/benchmark_results.csv")
-    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic"])
+    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic", "mnist", "food101"])
     return parser.parse_args()
 
 
@@ -41,6 +41,8 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     config = ProjectConfig()
+    if args.dataset == "food101":
+        config.num_classes = 101
     device = build_device(args.device)
 
     dataset = load_dataset(
