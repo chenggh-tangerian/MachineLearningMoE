@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-sizes", nargs="*", type=int, default=[1, 8, 16, 32, 64])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-csv", type=str, default="reports/benchmark_results.csv")
-    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic", "mnist", "food101"])
+    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic", "mnist", "food101", "cifar100"])
     return parser.parse_args()
 
 
@@ -43,6 +43,9 @@ def main() -> None:
     config = ProjectConfig()
     if args.dataset == "food101":
         config.num_classes = 101
+    if args.dataset == "cifar100":
+        config.input_dim = 1024
+        config.num_classes = 100
     device = build_device(args.device)
 
     dataset = load_dataset(

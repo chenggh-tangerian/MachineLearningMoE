@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--samples", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=str, default="outputs/baselines")
-    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic", "mnist", "food101"])
+    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic", "mnist", "food101", "cifar100"])
     return parser.parse_args()
 
 
@@ -114,6 +114,9 @@ def main() -> None:
     config = ProjectConfig()
     if args.dataset == "food101":
         config.num_classes = 101
+    if args.dataset == "cifar100":
+        config.input_dim = 1024
+        config.num_classes = 100
     device = build_device(args.device)
 
     train_set = load_dataset(

@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--samples", type=int, default=2048)
-    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic", "mnist", "food101"], help="Benchmark dataset")
+    parser.add_argument("--dataset", default="digits", choices=["digits", "synthetic", "mnist", "food101", "cifar100"], help="Benchmark dataset")
     parser.add_argument("--model", default="moe", choices=["moe", "transformer"], help="Model type")
     parser.add_argument("--seq-len", type=int, default=1)
     parser.add_argument("--num-layers", type=int, default=2)
@@ -92,6 +92,9 @@ def main() -> None:
     config = ProjectConfig()
     if args.dataset == "food101":
         config.num_classes = 101
+    if args.dataset == "cifar100":
+        config.input_dim = 1024
+        config.num_classes = 100
     if args.device == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
     else:

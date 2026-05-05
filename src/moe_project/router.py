@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Optional
 
 import torch
@@ -222,10 +223,16 @@ class MRFRouter(nn.Module):
         return RoutingOutput(indices=top_indices, weights=weights, aux_loss=balance_loss, load=load)
 
 
-def build_router_warmup_features(dataset, limit: Optional[int] = None) -> torch.Tensor:
+def build_router_warmup_features(
+    dataset,
+    limit: Optional[int] = None,
+    transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+) -> torch.Tensor:
     features = []
     for index in range(len(dataset)):
         feature, _ = dataset[index]
+        if transform is not None:
+            feature = transform(feature)
         features.append(feature)
         if limit is not None and len(features) >= limit:
             break

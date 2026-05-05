@@ -1,93 +1,78 @@
-# KMeans-MoE
+# KMeans-MoE 课程作业提交版
 
-一个围绕 MoE、K-Means 路由和路由可行性验证构建的课程项目骨架。
+本项目验证传统机器学习路由（K-Means、MRF、Random）在 MoE 中的可行性，并给出统一基线对比。
 
-这个版本专注算法本身。重点是回答一个问题：用 K-Means 作为路由机制，是否真的能让 MoE 更稳定、更均衡、更容易解释。
+当前提交版聚焦两个任务：
+1. CIFAR-100 图像分类（Accuracy）
+2. WikiText2 语言建模（PPL）
 
-## 项目目标
+## 核心内容
 
-1. 使用 K-Means 作为传统机器学习路由器，降低 MoE 的专家塌缩和路由不稳定问题。
-2. 提供随机路由和 Linear 专家两类基线，形成完整的消融对比。
-3. 提供从数据、路由、专家计算到训练脚本的完整项目结构，方便写报告和做实验。
+1. MoE 分类模型与路由基线：K-Means / MRF / Random / Linear experts
+2. WikiText2 语言模型版本的 MoE 路由对比
+3. 一键生成作业表格脚本（对应最终对比表）
 
-## 目录结构
+## 目录说明
 
 ```text
 .
+├── run/
+│   └── run_routing_table.py            # 一键跑 CIFAR-100 + WikiText2 并汇总表格
 ├── scripts/
-│   ├── benchmark.py
-│   ├── compare_baselines.py
+│   ├── compare_baselines.py            # 分类基线对比（含 CIFAR-100）
+│   ├── run_wikitext2_experiment.py     # WikiText2 路由对比
+│   ├── train.py
 │   ├── evaluate.py
-│   └── train.py
-├── src/
-│   └── moe_project/
-│       ├── baselines.py
-│       ├── config.py
-│       ├── data.py
-│       ├── experts.py
-│       ├── model.py
-│       └── router.py
+│   └── benchmark.py
+├── src/moe_project/
+│   ├── data.py                         # 数据加载（含 CIFAR-100、WikiText2）
+│   ├── model.py                        # 分类 MoE
+│   ├── language_model.py               # 语言模型 MoE
+│   ├── router.py
+│   ├── experts.py
+│   ├── baselines.py
+│   ├── metrics.py
+│   └── config.py
 ├── requirements.txt
-├── reports/
-│   ├── baseline_comparison_template.csv
-│   ├── benchmark_results_template.csv
-│   └── experiment_report_template.md
+├── pyproject.toml
 └── README.md
 ```
 
-## 运行方式
-
-先安装依赖：
+## 环境安装
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-然后运行一个 CPU 可用的烟雾测试：
+## 一键复现实验（最终结果）
 
 ```bash
-PYTHONPATH=src python scripts/train.py --epochs 5 --device cpu --dataset digits
+PYTHONPATH=src python run/run_routing_table.py \
+	--device cpu \
+	--seed 42 \
+	--output-dir outputs/routing_table_final
 ```
 
-如果想把训练过程保存成结果文件，可以这样运行：
+说明：
+1. 不要使用 `--smoke`，那是连通性检查模式，不用于最终汇报。
+2. 首次运行会自动下载 CIFAR-100 和 WikiText2 数据。
+
+## 输出文件
+
+运行完成后会在输出目录得到：
+1. `routing_table.csv`：最终可交表格数据
+2. `routing_table.md`：最终可直接粘贴到报告的表格
+3. `cifar100/baseline_comparison.csv`：分类任务明细
+4. `wikitext2/seed_42/baseline_comparison.json`：语言任务明细
+
+## 单独运行（可选）
+
 
 ```bash
-PYTHONPATH=src python scripts/train.py --epochs 20 --device cpu --dataset digits --save-dir outputs/train --save-checkpoint
+PYTHONPATH=src python scripts/compare_baselines.py --dataset cifar100 --device cpu --output-dir outputs/cifar100_only
+PYTHONPATH=src python scripts/run_wikitext2_experiment.py --device cpu --output-dir outputs/wikitext2_only
 ```
 
-训练结束后会生成 `outputs/train/history.json` 和可选的 `outputs/train/model.pt`。
+## 本实验启动命令
 
-评测与基准测试脚本也已经补齐：
-
-```bash
-PYTHONPATH=src python scripts/evaluate.py --device cpu --dataset digits --output-json outputs/eval/summary.json
-PYTHONPATH=src python scripts/benchmark.py --device cpu --dataset digits --output-csv reports/benchmark_results.csv
-PYTHONPATH=src python scripts/compare_baselines.py --device cpu --dataset digits --output-dir outputs/baselines
-```
-
-## 项目里怎么理解 MoE
-
-当前工程把专家前向拆成“按专家分组的 token chunk”，然后将它们交给专家网络处理，再按路由权重加权合并。你可以把它看成一个可解释的稀疏专家系统：
-
-1. K-Means 路由减少 token 到专家的搜索空间。
-2. top-k 路由让每个 token 只和少量专家交互。
-3. 加权聚合保证输出仍然连续可训练。
-
-## 建议的实验
-
-1. 先在合成分类数据上验证 K-Means 路由是否比随机路由更稳定。
-2. 再切到 Digits 标准数据集，验证方法是否能在更正式的基准上稳定工作。
-3. 统计负载均衡指标、路由熵、top-k 命中率。
-4. 对比普通 `Linear` 专家和 MoE 版本在吞吐上的差异。
-5. 用 `compare_baselines.py` 同时跑 K-Means 路由、随机路由和 Linear 专家消融，形成一张统一对比表。
-
-## 结果记录
-
-实验记录模板位于 [reports/experiment_report_template.md](reports/experiment_report_template.md)，吞吐结果模板位于 [reports/benchmark_results_template.csv](reports/benchmark_results_template.csv)。基线对比表模板位于 [reports/baseline_comparison_template.csv](reports/baseline_comparison_template.csv)。
-
-建议每次实验都记录以下字段：
-
-1. 模型版本与参数。
-2. 数据集规模与随机种子。
-3. 训练损失、准确率、路由熵、负载均衡度、负载变异系数。
-4. 吞吐、显存或内存占用。
+PYTHONPATH=src python run/run_routing_table.py --device cpu --seed 42 --output-dir outputs/routing_table_final

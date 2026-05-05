@@ -4,3 +4,4 @@ scikit-learn>=1.4
 pyyaml>=6.0
 tqdm>=4.66
 torchvision>=0.16
+datasets>=2.20

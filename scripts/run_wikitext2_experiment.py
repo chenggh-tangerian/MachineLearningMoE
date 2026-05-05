@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -15,23 +16,24 @@ if str(SRC) not in sys.path:
 import torch
 from torch.utils.data import DataLoader
 
-from moe_project.baselines import LinearExpertBank, RoutedClassifier
+from moe_project.baselines import LinearExpertBank
 from moe_project.config import ProjectConfig
 from moe_project.data import load_dataset
 from moe_project.experts import ExpertBank
-from moe_project.metrics import evaluate_model, measure_throughput
-from moe_project.model import MoEClassifier
+from moe_project.language_model import MoELanguageModel, RoutedLanguageModel
+from moe_project.metrics import summarize_routing
 from moe_project.router import KMeansRouter, MRFRouter, RandomRouter, build_router_warmup_features
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Food101 baseline comparisons")
+    parser = argparse.ArgumentParser(description="Run WikiText2 baseline comparisons")
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
-    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--samples", type=int, default=512)
+    parser.add_argument("--sequence-length", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output-dir", type=str, default="outputs/food101")
+    parser.add_argument("--output-dir", type=str, default="outputs/wikitext2")
     parser.add_argument("--num-seeds", type=int, default=1)
     parser.add_argument("--seed-step", type=int, default=1)
     return parser.parse_args()
@@ -46,36 +48,69 @@ def build_device(device_name: str) -> torch.device:
 def train_one_epoch(model, loader, optimizer, device):
     model.train()
     total_loss = 0.0
-    total_correct = 0
-    total_samples = 0
-    for features, labels in loader:
-        features = features.to(device)
-        labels = labels.to(device)
+    total_tokens = 0
+    for inputs, targets in loader:
+        inputs = inputs.to(device)
+        targets = targets.to(device)
         optimizer.zero_grad(set_to_none=True)
-        logits, aux_loss = model(features)
-        loss = torch.nn.functional.cross_entropy(logits, labels) + aux_loss
+        logits, aux_loss = model(inputs)
+        loss = torch.nn.functional.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1)) + aux_loss
         loss.backward()
         optimizer.step()
-        total_loss += float(loss.item()) * labels.size(0)
-        total_correct += int((logits.argmax(dim=-1) == labels).sum().item())
-        total_samples += labels.size(0)
-    return total_loss / max(1, total_samples), total_correct / max(1, total_samples)
+        total_loss += float(loss.item()) * targets.numel()
+        total_tokens += targets.numel()
+    return total_loss / max(1, total_tokens)
+
+
+@torch.no_grad()
+def evaluate(model, loader, device):
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+    entropies = []
+    balances = []
+    cvs = []
+
+    for inputs, targets in loader:
+        inputs = inputs.to(device)
+        targets = targets.to(device)
+        logits, aux_loss = model(inputs)
+        loss = torch.nn.functional.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1)) + aux_loss
+        total_loss += float(loss.item()) * targets.numel()
+        total_tokens += targets.numel()
+
+        routing = model.moe.router(model.router_features(inputs))
+        routing_summary = summarize_routing(routing)
+        entropies.append(routing_summary["routing_entropy"])
+        balances.append(routing_summary["load_balance"])
+        cvs.append(routing_summary["load_cv"])
+
+    avg_loss = total_loss / max(1, total_tokens)
+    return {
+        "loss": avg_loss,
+        "ppl": math.exp(min(20.0, avg_loss)),
+        "routing_entropy": sum(entropies) / max(1, len(entropies)),
+        "load_balance": sum(balances) / max(1, len(balances)),
+        "load_cv": sum(cvs) / max(1, len(cvs)),
+    }
 
 
 def fit_router_if_needed(model, dataset, config, device):
     if hasattr(model.moe.router, "fit"):
         warmup = build_router_warmup_features(dataset, config.router_warmup_samples)
+        router_features = model.router_features(warmup.to(device))
         try:
-            model.moe.router.fit(warmup.to(device))
+            model.moe.router.fit(router_features)
         except TypeError:
-            model.moe.router.fit(warmup.to(device), 50)
+            model.moe.router.fit(router_features, 50)
 
 
-def build_model_suite(config: ProjectConfig):
+def build_model_suite(config: ProjectConfig, vocab_size: int):
     return {
-        "kmeans_moe": MoEClassifier(config),
-        "mrf_moe": RoutedClassifier(
+        "kmeans_moe": MoELanguageModel(config, vocab_size=vocab_size),
+        "mrf_moe": RoutedLanguageModel(
             config,
+            vocab_size=vocab_size,
             router=MRFRouter(
                 input_dim=config.input_dim,
                 num_experts=config.num_experts,
@@ -89,13 +124,15 @@ def build_model_suite(config: ProjectConfig):
             ),
             experts=ExpertBank(config.input_dim, config.expert_hidden_dim, config.num_experts, config.drop_rate),
         ),
-        "random_router_moe": RoutedClassifier(
+        "random_router_moe": RoutedLanguageModel(
             config,
+            vocab_size=vocab_size,
             router=RandomRouter(config.input_dim, config.num_experts, config.top_k, config.router_balance_weight),
             experts=ExpertBank(config.input_dim, config.expert_hidden_dim, config.num_experts, config.drop_rate),
         ),
-        "linear_experts_moe": RoutedClassifier(
+        "linear_experts_moe": RoutedLanguageModel(
             config,
+            vocab_size=vocab_size,
             router=KMeansRouter(
                 input_dim=config.input_dim,
                 num_experts=config.num_experts,
@@ -112,24 +149,28 @@ def run_single_seed(seed: int, args: argparse.Namespace, device: torch.device) -
     torch.manual_seed(seed)
 
     config = ProjectConfig()
-    config.num_classes = 101
-
     train_set = load_dataset(
-        "food101",
+        "wikitext2",
         train=True,
         seed=seed,
         input_dim=config.input_dim,
         num_classes=config.num_classes,
         samples=args.samples,
+        sequence_length=args.sequence_length,
     )
     test_set = load_dataset(
-        "food101",
+        "wikitext2",
         train=False,
         seed=seed,
         input_dim=config.input_dim,
         num_classes=config.num_classes,
         samples=args.samples,
+        sequence_length=args.sequence_length,
     )
+
+    vocab_size = int(getattr(train_set, "vocab_size"))
+    config.num_classes = vocab_size
+
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
 
@@ -137,7 +178,7 @@ def run_single_seed(seed: int, args: argparse.Namespace, device: torch.device) -
     seed_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict[str, float | int | str]] = []
-    for name, model in build_model_suite(config).items():
+    for name, model in build_model_suite(config, vocab_size).items():
         model = model.to(device)
         fit_router_if_needed(model, train_set, config, device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
@@ -145,18 +186,42 @@ def run_single_seed(seed: int, args: argparse.Namespace, device: torch.device) -
         for _ in range(args.epochs):
             train_one_epoch(model, train_loader, optimizer, device)
 
-        summary = evaluate_model(model, test_loader, device)
+        summary = evaluate(model, test_loader, device)
         sample_batch = torch.stack([test_set[i][0] for i in range(min(args.batch_size, len(test_set)))], dim=0)
-        throughput = measure_throughput(model, sample_batch, device)
+        throughput = 0.0
+        if sample_batch.numel() > 0:
+            model.eval()
+            sample_batch = sample_batch.to(device)
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            start = torch.cuda.Event(enable_timing=True) if device.type == "cuda" else None
+            end = torch.cuda.Event(enable_timing=True) if device.type == "cuda" else None
+            if device.type == "cuda":
+                start.record()
+            else:
+                import time
+
+                t0 = time.perf_counter()
+            steps = 50
+            with torch.no_grad():
+                for _ in range(steps):
+                    _ = model(sample_batch)
+            if device.type == "cuda":
+                end.record()
+                torch.cuda.synchronize()
+                elapsed = start.elapsed_time(end) / 1000.0
+            else:
+                elapsed = time.perf_counter() - t0
+            throughput = (sample_batch.size(0) * steps) / max(elapsed, 1e-9)
 
         row = {
             "seed": seed,
             "model": name,
-            "loss": summary.loss,
-            "accuracy": summary.accuracy,
-            "routing_entropy": summary.routing_entropy,
-            "load_balance": summary.load_balance,
-            "load_cv": summary.load_cv,
+            "loss": summary["loss"],
+            "ppl": summary["ppl"],
+            "routing_entropy": summary["routing_entropy"],
+            "load_balance": summary["load_balance"],
+            "load_cv": summary["load_cv"],
             "throughput_samples_per_second": throughput,
         }
         rows.append(row)
@@ -186,7 +251,7 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = output_dir / "food101_experiment_all_seeds.csv"
+    summary_path = output_dir / "wikitext2_experiment_all_seeds.csv"
     with summary_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(all_rows[0].keys()))
         writer.writeheader()
